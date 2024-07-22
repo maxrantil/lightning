@@ -29,6 +29,7 @@
 #include <common/status.h>
 #include <common/subdaemon.h>
 #include <common/timeout.h>
+#include <common/whitelisted_peer.h>
 #include <common/wire_error.h>
 #include <connectd/connectd.h>
 #include <connectd/connectd_gossipd_wiregen.h>
@@ -180,6 +181,7 @@ static struct peer *new_peer(struct daemon *daemon,
 	peer->scid_query_idx = 0;
 	peer->scid_query_nodes = NULL;
 	peer->scid_query_nodes_idx = 0;
+	// peer->alt_addr = NULL; //remove from struct too
 	peer->onionmsg_incoming_tokens = ONION_MSG_TOKENS_MAX;
 	peer->onionmsg_last_incoming = time_mono();
 	peer->onionmsg_limit_warned = false;
@@ -313,6 +315,77 @@ struct io_plan *peer_connected(struct io_conn *conn,
 	return multiplex_peer_setup(conn, peer);
 }
 
+static bool verify_alt_addr(struct io_conn *conn,
+                            struct daemon *daemon,
+                            const struct node_id *id)
+{
+	struct sockaddr_in local_addr;
+	socklen_t addr_len = sizeof(local_addr);
+
+	/* Get local address and port */
+	if (getsockname(io_conn_fd(conn), (struct sockaddr *)&local_addr,
+				   &addr_len) == -1) {
+		status_broken("verify_alt_addr: getsockname failed");
+		return false;
+	}
+
+	char listening_addr[INET_ADDRSTRLEN];
+	if (!inet_ntop(AF_INET, &local_addr.sin_addr, listening_addr,
+		       sizeof(listening_addr))) {
+		status_broken("verify_alt_addr: inet_ntop failed");
+		return false;
+	}
+	int listening_port = ntohs(local_addr.sin_port);
+
+	char full_listening_addr[INET_ADDRSTRLEN + 6];
+	snprintf(full_listening_addr, sizeof(full_listening_addr), "%s:%d",
+		 listening_addr, listening_port);
+
+	struct wireaddr_internal search_addr;
+	if (parse_wireaddr_internal(tmpctx, full_listening_addr, 0,
+				    false, &search_addr) != NULL) {
+		status_broken("verify_alt_addr: parse_wireaddr_internal failed");
+		return false;
+	}
+
+	struct whitelisted_peer *wp = whitelisted_peer_htable_get(daemon->whitelisted_peer_htable,
+								  id);
+	bool is_whitelisted = false;
+
+	if (wp) {
+		size_t num_addrs = tal_count(wp->our_alt_addrs);
+		for (size_t i = 0; i < num_addrs; ++i) {
+			char *whitelist_addr_str = fmt_wireaddr_internal(tmpctx,
+									 &wp->our_alt_addrs[i]);
+			if (strcmp(full_listening_addr, whitelist_addr_str) == 0) {
+				is_whitelisted = true;
+				status_debug("Peer's address %s is in the whitelist. Accepting connection.",
+					     full_listening_addr);
+				goto check_alt_bind_addr;
+			}
+		}
+	}
+
+check_alt_bind_addr:
+	/* Check against alt_bind_addr only if the connection is not whitelisted */
+	if (!is_whitelisted) {
+		char *alt_bind_addrs = tal_strdup(tmpctx,
+						  (const char *)daemon->alt_bind_addr);
+		for (char *alt_bind_token = strtok(alt_bind_addrs, ",");
+		     alt_bind_token;
+		     alt_bind_token = strtok(NULL, ",")) {
+			if (strcmp(full_listening_addr, alt_bind_token) == 0) {
+				status_unusual("Connection attempt from address %s which is not in the whitelist. Closing connection.",
+				               full_listening_addr);
+				tal_free(alt_bind_addrs);
+				return false;
+			}
+		}
+		tal_free(alt_bind_addrs);
+	}
+	return true;
+}
+
 /*~ handshake.c's handles setting up the crypto state once we get a connection
  * in; we hand it straight to peer_exchange_initmsg() to send and receive INIT
  * and call peer_connected(). */
@@ -327,6 +400,13 @@ static struct io_plan *handshake_in_success(struct io_conn *conn,
 	struct node_id id;
 	node_id_from_pubkey(&id, id_key);
 	status_peer_debug(&id, "Connect IN");
+
+	/* Confirm that peer connects to the alt-bind-addr you sent */
+	if (daemon->alt_bind_addr) {
+		if (!verify_alt_addr(conn, daemon, &id))
+			return (io_close(conn));
+	}
+
 	return peer_exchange_initmsg(conn, daemon, daemon->our_features,
 				     cs, &id, addr, timeout, is_websocket, true);
 }
@@ -519,15 +599,15 @@ static struct io_plan *connection_in(struct io_conn *conn,
 	return conn_in(conn, &conn_in_arg);
 }
 
-void handle_peer_alt_addr(struct peer *peer, const u8 *msg)
+void handle_peer_alt_addr(struct peer *p, const u8 *msg)
 {
 	u8 *p_alt_addr;
 
-	if (!fromwire_peer_alt_addr(peer, msg, &p_alt_addr))
+	if (!fromwire_peer_alt_addr(p, msg, &p_alt_addr))
 		master_badmsg(WIRE_PEER_ALT_ADDR, msg);
 
-	u8 *fwd_msg = towire_connectd_peer_alt_addr(tmpctx, &peer->id, p_alt_addr);
-	daemon_conn_send(peer->daemon->master, take(fwd_msg));
+	u8 *fwd_msg = towire_connectd_peer_alt_addr(tmpctx, &p->id, p_alt_addr);
+	daemon_conn_send(p->daemon->master, take(fwd_msg));
 	tal_free(p_alt_addr);
 }
 
@@ -1438,7 +1518,9 @@ static void connect_init(struct daemon *daemon, const u8 *msg)
 				    &dev_disconnect,
 				    &daemon->dev_no_ping_timer,
 				    &daemon->dev_handshake_no_reply,
-				    &dev_throttle_gossip)) {
+				    &dev_throttle_gossip,
+				    &daemon->alt_bind_addr,
+				    &daemon->whitelisted_peers)) {
 		/* This is a helper which prints the type expected and the actual
 		 * message, then exits (it should never be called!). */
 		master_badmsg(WIRE_CONNECTD_INIT, msg);
@@ -1709,6 +1791,7 @@ static void try_connect_peer(struct daemon *daemon,
 			     const struct node_id *id,
 			     struct wireaddr *gossip_addrs,
 			     struct wireaddr_internal *addrhint STEALS,
+			     struct wireaddr_internal *peer_alt_addr STEALS,
 			     bool dns_fallback,
 			     bool transient)
 {
@@ -1736,6 +1819,12 @@ static void try_connect_peer(struct daemon *daemon,
 			tal_arr_expand(&connect->addrs, *addrhint);
 		}
 
+		/* Update addrs with peer_alt_addrs if provided */
+		if (peer_alt_addr) {
+			for (size_t i = 0; i < tal_count(peer_alt_addr); i++)
+				tal_arr_expand(&connect->addrs, peer_alt_addr[i]);
+		}
+
 		return;
 	}
 
@@ -1753,6 +1842,10 @@ static void try_connect_peer(struct daemon *daemon,
 			 && addrhint->itype == ADDR_INTERNAL_WIREADDR
 			 && !addrhint->u.wireaddr.is_websocket
 			 ? &addrhint->u.wireaddr.wireaddr : NULL);
+
+	/* Add all peer_alt_addrs next so they're tried after addrhint by connectd */
+	for (size_t i = 0; i < tal_count(peer_alt_addr); i++)
+		tal_arr_expand(&addrs, peer_alt_addr[i]);
 
 	if (tal_count(addrs) == 0) {
 		/* Don't resolve via DNS seed if we're supposed to use proxy. */
@@ -1810,16 +1903,18 @@ static void connect_to_peer(struct daemon *daemon, const u8 *msg)
 	struct node_id id;
 	struct wireaddr_internal *addrhint;
 	struct wireaddr *addrs;
+	struct wireaddr_internal *peer_alt_addr;
 	bool dns_fallback;
 	bool transient;
 
 	if (!fromwire_connectd_connect_to_peer(tmpctx, msg,
 					       &id, &addrs, &addrhint,
-					       &dns_fallback,
+					       &peer_alt_addr, &dns_fallback,
 					       &transient))
 		master_badmsg(WIRE_CONNECTD_CONNECT_TO_PEER, msg);
 
-	try_connect_peer(daemon, &id, addrs, addrhint, dns_fallback, transient);
+	try_connect_peer(daemon, &id, addrs, addrhint,
+			 peer_alt_addr, dns_fallback, transient);
 }
 
 /* lightningd tells us a peer should be disconnected. */
@@ -2148,6 +2243,21 @@ static void dev_exhaust_fds(struct daemon *daemon, const u8 *msg)
 	daemon->dev_exhausted_fds = true;
 }
 
+static void handle_alt_addr_whitelist(struct daemon *daemon, const u8 *msg)
+{
+	struct whitelisted_peer *received_peers;
+
+	if (!fromwire_connectd_alt_addr_whitelist(daemon, msg, &received_peers)) {
+		master_badmsg(WIRE_CONNECTD_ALT_ADDR_WHITELIST, msg);
+		return;
+	}
+
+	tal_free(daemon->whitelisted_peers);
+	daemon->whitelisted_peers = tal_steal(daemon, received_peers); //FIXME(maxrantil):noneed for whitelisted_peers when we have a htable??
+
+	populate_whitelist_table(daemon);
+}
+
 static struct io_plan *recv_peer_connect_subd(struct io_conn *conn,
 					      const u8 *msg,
 					      int fd,
@@ -2243,6 +2353,10 @@ static struct io_plan *recv_req(struct io_conn *conn,
 			goto out;
 		}
 		/* Fall thru */
+	case WIRE_CONNECTD_ALT_ADDR_WHITELIST:
+		handle_alt_addr_whitelist(daemon, msg);
+		goto out;
+		/* Fall thru */
 	case WIRE_CONNECTD_DEV_SET_MAX_SCIDS_ENCODE_SIZE:
 		if (daemon->developer) {
 			dev_set_max_scids_encode_size(daemon, msg);
@@ -2262,6 +2376,7 @@ static struct io_plan *recv_req(struct io_conn *conn,
 	case WIRE_CONNECTD_PEER_DISCONNECT_DONE:
 	case WIRE_CONNECTD_START_SHUTDOWN_REPLY:
 	case WIRE_CONNECTD_INJECT_ONIONMSG_REPLY:
+	case WIRE_CONNECTD_PEER_ALT_ADDR:
 		break;
 	}
 
@@ -2349,6 +2464,8 @@ int main(int argc, char *argv[])
 	daemon->gossip_stream_limit = 1000000;
 	daemon->scid_htable = tal(daemon, struct scid_htable);
 	scid_htable_init(daemon->scid_htable);
+	daemon->whitelisted_peer_htable = tal(daemon, struct whitelisted_peer_htable);
+	whitelisted_peer_htable_init(daemon->whitelisted_peer_htable);
 
 	/* stdin == control */
 	daemon->master = daemon_conn_new(daemon, STDIN_FILENO, recv_req, NULL,

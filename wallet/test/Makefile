@@ -28,6 +28,7 @@ WALLET_TEST_COMMON_OBJS :=			\
 	common/utils.o				\
 	common/utxo.o				\
 	common/wireaddr.o			\
+	common/whitelisted_peer.o		\
 	common/version.o			\
 	wallet/db_sqlite3_sqlgen.o		\
 	wire/towire.o				\

@@ -1381,21 +1381,100 @@ static void handle_local_anchors(struct channel *channel, const u8 *msg)
 	}
 }
 
-static void handle_our_alt_addr(struct lightningd *ld, struct channel *channel,
-				const u8 *msg)
+static bool address_exists(const struct wireaddr_internal *alt_addrs,
+			   size_t count, const struct wireaddr_internal *addr)
 {
-	u8 *our_alt_addr;
+	for (size_t i = 0; i < count; i++)
+		if (wireaddr_internal_eq(&alt_addrs[i], addr))
+			return true;
+	return false;
+}
 
-	if (!fromwire_channeld_our_alt_addr(tmpctx, msg, &our_alt_addr)) {
+static void add_addrs_to_whitelisted_peer(struct whitelisted_peer *wp,
+					  const struct wireaddr_internal *addrs,
+					  size_t addr_count)
+{
+	if (!wp->my_alt_addrs)
+		wp->my_alt_addrs = tal_arr(wp, struct wireaddr_internal, 0);
+	
+	size_t existing_count = tal_count(wp->my_alt_addrs);
+	for (size_t j = 0; j < addr_count; j++)
+		if (!address_exists(wp->my_alt_addrs, existing_count, &addrs[j]))
+			tal_arr_expand(&wp->my_alt_addrs, addrs[j]);
+}
+
+static void update_whitelisted_peers(struct lightningd *ld,
+				     const struct node_id *p_id,
+				     const struct wireaddr_internal *addrs)
+{
+	if (!ld->whitelisted_peers)
+		ld->whitelisted_peers = tal_arr(ld, struct whitelisted_peer, 0);
+
+	bool found = false;
+	size_t addr_count = tal_count(addrs);
+	size_t wp_count = tal_count(ld->whitelisted_peers);
+	for (size_t i = 0; i < wp_count; i++)
+		if (node_id_eq(&ld->whitelisted_peers[i].id, p_id)) {
+			add_addrs_to_whitelisted_peer(&ld->whitelisted_peers[i],
+						      addrs, addr_count);
+			found = true;
+			break;
+		}
+
+	if (!found)
+		add_new_whitelisted_peer(ld, p_id, addrs, addr_count);
+
+	u8 *msg = towire_connectd_alt_addr_whitelist(tmpctx, ld->whitelisted_peers);
+	subd_send_msg(ld->connectd, take(msg));
+}
+
+static void process_and_update_whitelist(struct lightningd *ld,
+					 const struct node_id *p_id,
+					 const u8 *alt_addr_data)
+{
+	char **addr_list = tal_strsplit(tmpctx, (const char *)alt_addr_data,
+					",", STR_NO_EMPTY);
+	if (!addr_list)
+		return;
+
+	struct wireaddr_internal *addrs = tal_arr(tmpctx,
+						  struct wireaddr_internal, 0);
+	for (size_t i = 0; addr_list[i] != NULL; i++) {
+		struct wireaddr_internal addr;
+		const char *err = parse_wireaddr_internal(tmpctx, addr_list[i],
+							  0, false, &addr);
+		if (err) {
+			log_debug(ld->log,
+				  "Invalid alternative address %s for peer %s: %s",
+				  addr_list[i], fmt_node_id(tmpctx, p_id), err);
+			continue;
+		}
+		tal_arr_expand(&addrs, addr);
+	
+	}
+
+	tal_free(addr_list);
+	update_whitelisted_peers(ld, p_id, addrs);
+	tal_free(addrs);
+}
+
+static void handle_channel_alt_addr(struct lightningd *ld,
+				    struct channel *channel,
+				    const u8 *msg)
+{
+	u8 *my_alt_addr;
+
+	if (!fromwire_channeld_my_alt_addr(tmpctx, msg, &my_alt_addr)) {
 		channel_internal_error(channel,
-				       "bad channeld_our_alt_addr %s",
+				       "bad channeld_my_alt_addr %s",
 				       tal_hex(channel, msg));
 		return;
 	}
 
 	wallet_add_alt_addr(ld->wallet->db, &channel->peer->id,
-			    (char *)our_alt_addr, true);
-	tal_free(our_alt_addr);
+			    (char *)my_alt_addr, true);
+	process_and_update_whitelist(ld, &channel->peer->id, my_alt_addr);
+	tal_free(my_alt_addr);
 }
 
 static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
@@ -1478,8 +1557,8 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_UPGRADED:
 		handle_channel_upgrade(sd->channel, msg);
 		break;
-	case WIRE_CHANNELD_OUR_ALT_ADDR:
-		handle_our_alt_addr(sd->ld, sd->channel, msg);
+	case WIRE_CHANNELD_MY_ALT_ADDR:
+		handle_channel_alt_addr(sd->ld, sd->channel, msg);
 		break;
 
 	/* And we never get these from channeld. */
@@ -2361,3 +2440,55 @@ static const struct json_command dev_quiesce_command = {
 	.dev_only = true,
 };
 AUTODATA(json_command, &dev_quiesce_command);
+
+static struct command_result *json_alt_addr(struct command *cmd,
+					    const char *buffer,
+					    const jsmntok_t *obj UNNEEDED,
+					    const jsmntok_t *params)
+{
+	struct node_id *p_id;
+	struct peer *peer;
+	struct channel *channel;
+	const char *my_alt_addr;
+	bool more_than_one;
+
+	if (!param_check(cmd, buffer, params,
+			 p_req("node_id", param_node_id, &p_id),
+			 p_req("alt_addr", param_string, &my_alt_addr),
+			 NULL))
+		return command_param_failed();
+
+	peer = peer_by_id(cmd->ld, p_id);
+	if (!peer) {
+		return command_fail(cmd, JSONRPC2_INVALID_REQUEST,
+				    "No such peer: %s",
+				    fmt_node_id(cmd, p_id));
+	}
+
+	channel = peer_any_channel(peer, channel_state_can_add_htlc, &more_than_one);
+	if (!channel || !channel->owner)
+		return command_fail(cmd, LIGHTNINGD, "Peer bad state");
+	/* This is a dev command: fix the api if you need this! */
+	if (more_than_one)
+		return command_fail(cmd, LIGHTNINGD, "More than one channel");
+
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
+	u8 *msg = towire_channeld_peer_alt_addr(peer, (u8 *)my_alt_addr);
+	subd_send_msg(channel->owner, take(msg));
+
+	wallet_add_alt_addr(cmd->ld->wallet->db, p_id, my_alt_addr, true);
+	process_and_update_whitelist(cmd->ld, p_id, (u8 *)my_alt_addr);
+
+	return command_success(cmd, json_stream_success(cmd));
+}
+
+static const struct json_command alt_addr_command = {
+	"alt-addr",
+	"developer",
+	json_alt_addr,
+	"Select an alternative private address for peer-to-peer connections",
+	.dev_only = true,
+};
+AUTODATA(json_command, &alt_addr_command);

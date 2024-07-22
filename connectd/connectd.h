@@ -12,6 +12,7 @@
 #include <common/node_id.h>
 #include <common/pseudorand.h>
 #include <common/wireaddr.h>
+#include <common/whitelisted_peer.h>
 #include <connectd/handshake.h>
 
 struct io_conn;
@@ -67,6 +68,7 @@ struct peer {
 
 	/* The pubkey of the node */
 	struct node_id id;
+
 	/* Counters and keys for symmetric crypto */
 	struct crypto_state cs;
 
@@ -126,6 +128,8 @@ struct peer {
 	/* Are there outstanding node_announcements from scid_queries? */
 	struct node_id *scid_query_nodes;
 	size_t scid_query_nodes_idx;
+
+	u8 *alt_addr;
 };
 
 /* We gain one token per msec, and each msg uses 250 tokens. */
@@ -226,6 +230,24 @@ HTABLE_DEFINE_TYPE(struct scid_to_node_id,
 		   scid_to_node_id_eq_scid,
 		   scid_htable);
 
+static const struct node_id *whitelisted_peer_keyof(const struct whitelisted_peer *wp)
+{
+	return &wp->id;
+}
+
+static bool whitelisted_peer_eq(const struct whitelisted_peer *wp, const struct node_id *id)
+{
+	return node_id_eq(&wp->id, id);
+}
+
+/*~ This defines 'struct witelisted_peer_htable' which contains
+ *  'struct whitelisted_peer' pointers. */
+HTABLE_DEFINE_TYPE(struct whitelisted_peer,
+                   whitelisted_peer_keyof,
+                   node_id_hash,
+                   whitelisted_peer_eq,
+                   whitelisted_peer_htable);
+
 /*~ This is the global state, like `struct lightningd *ld` in lightningd. */
 struct daemon {
 	/* Who am I? */
@@ -289,6 +311,11 @@ struct daemon {
 	/* Our features, as lightningd told us */
 	struct feature_set *our_features;
 
+	struct whitelisted_peer *whitelisted_peers;
+	struct whitelisted_peer_htable *whitelisted_peer_htable;
+	/* Bind for 'alt-addr' rpc cmd, or '--alt-annouce-addr' listening, but do not announce */
+	u8 *alt_bind_addr;
+
 	/* Subdaemon to proxy websocket requests. */
 	char *websocket_helper;
 
@@ -322,7 +349,7 @@ struct daemon {
 	bool dev_exhausted_fds;
 	/* Allow connections in, but don't send anything */
 	bool dev_handshake_no_reply;
- };
+};
 
 /* Called by io_tor_connect once it has a connection out. */
 struct io_plan *connection_out(struct io_conn *conn, struct connecting *connect);

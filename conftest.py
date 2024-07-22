@@ -5,6 +5,9 @@ import os
 import json
 from time import time
 import unittest
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 server = os.environ.get("CI_SERVER_URL", None)
 
