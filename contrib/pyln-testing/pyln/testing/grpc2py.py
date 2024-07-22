@@ -84,6 +84,7 @@ def listpeers_peers_log2py(m):
 
 def listpeers_peers2py(m):
     return remove_default({
+        "alt_addrs": [m.alt_addrs for i in m.alt_addrs], # ArrayField[primitive] in generate_composite
         "log": [listpeers_peers_log2py(i) for i in m.log],  # ArrayField[composite] in generate_composite
         "netaddr": [m.netaddr for i in m.netaddr], # ArrayField[primitive] in generate_composite
         "connected": m.connected,  # PrimitiveField in generate_composite
@@ -2037,6 +2038,13 @@ def listconfigs_configs_allow_deprecated_apis2py(m):
     return remove_default({
         "source": m.source,  # PrimitiveField in generate_composite
         "value_bool": m.value_bool,  # PrimitiveField in generate_composite
+    })
+
+
+def listconfigs_configs_alt_addr2py(m):
+    return remove_default({
+        "sources": [m.sources for i in m.sources], # ArrayField[primitive] in generate_composite
+        "values_str": [m.values_str for i in m.values_str], # ArrayField[primitive] in generate_composite
     })
 
 

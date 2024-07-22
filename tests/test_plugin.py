@@ -3710,6 +3710,13 @@ def test_sql(node_factory, bitcoind):
                          'type': 'string'},
                         {'name': 'features',
                          'type': 'hex'}]},
+        'peers_alt_addrs': {
+            'columns': [{'name': 'peer_id',
+                         'type': 'pubkey'},
+                        {'name': 'alt_addr',
+                         'type': 'string'},
+                        {'name': 'port',
+                         'type': 'u16'}]},
         'peers_netaddr': {
             'columns': [{'name': 'row',
                          'type': 'u64'},

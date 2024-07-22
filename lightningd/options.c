@@ -440,6 +440,77 @@ static char *opt_add_bind_addr(const char *arg, struct lightningd *ld)
 	return opt_add_addr_withtype(arg, ld, ADDR_LISTEN);
 }
 
+static char *opt_add_alt_addr(const char *arg, struct lightningd *ld)
+{
+	assert(arg != NULL);
+
+	if (*arg == '\0') {
+		ld->alt_addr = tal_free(ld->alt_addr);
+		ld->alt_bind_addr = tal_free(ld->alt_bind_addr);
+		return NULL;
+	}
+
+	if (!ld->alt_addr)
+		ld->alt_addr = (u8 *)tal_strdup(ld, arg);
+	else
+		ld->alt_addr = (u8 *)tal_fmt(ld, "%s,%s", ld->alt_addr, arg);
+
+	if (!ld->alt_bind_addr)
+		ld->alt_bind_addr = (u8 *)tal_strdup(ld, arg);
+	else
+		ld->alt_bind_addr = (u8 *)tal_fmt(ld, "%s,%s", ld->alt_bind_addr, arg);
+
+	return opt_add_addr_withtype(arg, ld, ADDR_LISTEN);
+}
+
+static char *opt_add_alt_bind_addr(const char *arg, struct lightningd *ld)
+{
+	assert(arg != NULL);
+
+	if (*arg == '\0') {
+		ld->alt_bind_addr = tal_free(ld->alt_bind_addr);
+		return NULL;
+	}
+
+	if (!ld->alt_bind_addr)
+		ld->alt_bind_addr = (u8 *)tal_strdup(ld, arg);
+	else
+		ld->alt_bind_addr = (u8 *)tal_fmt(ld, "%s,%s", ld->alt_bind_addr, arg);
+
+	return opt_add_addr_withtype(arg, ld, ADDR_LISTEN);
+}
+
+static char *opt_add_alt_announce_addr(const char *arg, struct lightningd *ld)
+{
+	assert(arg != NULL);
+
+	/* 'alt-bind-addr' must be set before 'alt-announce-addr'. */
+	if (ld == NULL || ld->alt_bind_addr == NULL)
+		return tal_fmt(tmpctx,
+			       "argument must first be bound by 'alt-bind-addr'");
+
+	/* Check if the argument matches any of the bound alt-bind addresses */
+	bool match_found = false;
+	char **bind_addrs = tal_strsplit(tmpctx, (char *)ld->alt_bind_addr, ",", STR_NO_EMPTY);
+	for (size_t i = 0; bind_addrs[i] != NULL; i++) {
+		if (strcmp(arg, bind_addrs[i]) == 0) {
+			match_found = true;
+			break;
+		}
+	}
+
+	if (!match_found)
+		return tal_fmt(tmpctx,
+			       "argument must match a bound 'alt-bind-addr'");
+
+	if (!ld->alt_addr)
+		ld->alt_addr = (u8 *)tal_strdup(ld, arg);
+	else
+		ld->alt_addr = (u8 *)tal_fmt(ld, "%s,%s", ld->alt_addr, arg);
+
+	return NULL;
+}
+
 static char *opt_subdaemon(const char *arg, struct lightningd *ld)
 {
 	char *subdaemon;
@@ -1604,6 +1675,17 @@ static void register_opts(struct lightningd *ld)
 		       opt_set_uintval,
 		       opt_show_uintval, &ld->config.ip_discovery_port,
 		       "Sets the public TCP port to use for announcing discovered IPs.");
+
+	clnopt_witharg("--alt-addr", OPT_MULTI, opt_add_alt_addr, NULL,
+		       ld,
+		       "Set an alternative IP address (v4 or v6) to use by default for private reconnections with established peers.");
+	clnopt_witharg("--alt-bind-addr", OPT_MULTI, opt_add_alt_bind_addr, NULL,
+		       ld,
+		       "Bind an alternative IP address (v4 or v6) for listening, but do not announce or use automatically.");
+	clnopt_witharg("--alt-announce-addr", OPT_MULTI, opt_add_alt_announce_addr, NULL,
+		       ld,
+		       "Provide a reserved IP address (bound by --alt-bind-addr) to established channel peers.");
+
 	opt_register_noarg("--offline", opt_set_offline, ld,
 			   "Start in offline-mode (do not automatically reconnect and do not accept incoming connections)");
 	clnopt_witharg("--autolisten", OPT_SHOWBOOL,
@@ -2199,6 +2281,9 @@ bool is_known_opt_cb_arg(char *(*cb_arg)(const char *, void *))
 		|| cb_arg == (void *)opt_add_addr
 		|| cb_arg == (void *)opt_add_bind_addr
 		|| cb_arg == (void *)opt_add_announce_addr
+		|| cb_arg == (void *)opt_add_alt_addr
+		|| cb_arg == (void *)opt_add_alt_bind_addr
+		|| cb_arg == (void *)opt_add_alt_announce_addr
 		|| cb_arg == (void *)opt_subdaemon
 		|| cb_arg == (void *)opt_set_db_upgrade
 		|| cb_arg == (void *)arg_log_to_file

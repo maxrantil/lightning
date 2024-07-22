@@ -4142,6 +4142,8 @@ pub mod responses {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub remote_addr: Option<String>,
 	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub alt_addrs: Option<Vec<String>>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
 	    pub log: Option<Vec<ListpeersPeersLog>>,
 	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
 	    pub netaddr: Option<Vec<String>>,
@@ -8736,6 +8738,12 @@ pub mod responses {
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ListconfigsConfigsAltaddr {
+	    pub sources: Vec<String>,
+	    pub values_str: Vec<String>,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct ListconfigsConfigsAlwaysuseproxy {
 	    pub source: String,
 	    pub value_bool: bool,
@@ -9215,6 +9223,9 @@ pub mod responses {
 	    #[serde(rename = "allow-deprecated-apis")]
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub allow_deprecated_apis: Option<ListconfigsConfigsAllowdeprecatedapis>,
+	    #[serde(rename = "alt-addr")]
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub alt_addr: Option<ListconfigsConfigsAltaddr>,
 	    #[serde(rename = "always-use-proxy")]
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub always_use_proxy: Option<ListconfigsConfigsAlwaysuseproxy>,
