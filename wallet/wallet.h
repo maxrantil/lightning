@@ -395,6 +395,35 @@ struct wallet_transaction {
 };
 
 /**
+ * wallet_add_alt_addr - Update the alternative address for a peer connection
+ * @db: the database
+ * @node_id: the ID of the node
+ * @alt_addr: the alternative address to set
+ * @is_our_addr: flag to update `our_alt_addr` or `peer_alt_addr`
+ *
+ * This function updates the `our_alt_addr` or `peer_alt_addr` field of a peer
+ * in the database based on the value of the `is_our_addr` flag. If `is_our_addr`
+ * is true, it updates the `our_alt_addr` field; otherwise, it updates the
+ * `peer_alt_addr` field. If `alt_addr` is NULL, it just returns.
+ */
+void wallet_add_alt_addr(struct db *db, const struct node_id *node_id,
+			 const char *alt_addr, bool is_our_alt_addr);
+
+
+/**
+ * wallet_get_alt_addr - Retrieve alternative connection addresses
+ * @w: the wallet containing the database
+ * @node_id: the ID of the node whose alternative addresses is to be retrieved
+ * @use_our_alt_addr: a boolean flag to use `our_alt_addr` or `peer_alt_addr`
+ *
+ * Returns: A pointer to the `wireaddr_internal` struct containing alternative
+ *          addresses, or NULL if no valid alternative address is found.
+ */
+struct wireaddr_internal *wallet_get_alt_addr(struct wallet *w,
+					      const struct node_id *node_id,
+					      bool use_our_alt_addr);
+
+/**
  * wallet_new - Constructor for a new DB based wallet
  *
  * This is guaranteed to either return a valid wallet, or abort with
