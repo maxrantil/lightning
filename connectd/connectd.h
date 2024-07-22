@@ -352,4 +352,8 @@ void destroy_peer(struct peer *peer);
 
 /* Remove a random connection, when under stress. */
 void close_random_connection(struct daemon *daemon);
+
+/* Handles alternative address message from peer. */
+void handle_peer_alt_addr(struct peer *peer, const u8 *msg);
+
 #endif /* LIGHTNING_CONNECTD_CONNECTD_H */
