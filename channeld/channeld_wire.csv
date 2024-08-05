@@ -357,6 +357,6 @@ msgdata,channeld_peer_alt_addr,alt_addr_len,u16,
 msgdata,channeld_peer_alt_addr,alt_addr,u8,alt_addr_len,
 
 # channeld -> master: send our alternative addresses to our db
-msgtype,channeld_our_alt_addr,1037
-msgdata,channeld_our_alt_addr,alt_addr_len,u16,
-msgdata,channeld_our_alt_addr,alt_addr,u8,alt_addr_len,
+msgtype,channeld_my_alt_addr,1037
+msgdata,channeld_my_alt_addr,alt_addr_len,u16,
+msgdata,channeld_my_alt_addr,alt_addr,u8,alt_addr_len,

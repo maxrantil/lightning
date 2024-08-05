@@ -1028,13 +1028,13 @@ done:
 }
 
 void wallet_add_alt_addr(struct db *db, const struct node_id *node_id,
-			 const char *alt_addr, bool is_our_alt_addr)
+			 const char *alt_addr, bool is_my_alt_addr)
 {
 	struct db_stmt *stmt;
 
-	if (is_our_alt_addr)
+	if (is_my_alt_addr)
 		stmt = db_prepare_v2(db, SQL("UPDATE peers"
-						     " SET our_alt_addr=?"
+						     " SET my_alt_addr=?"
 						     " WHERE node_id = ?;"));
 	else
 		stmt = db_prepare_v2(db, SQL("UPDATE peers"
@@ -1061,13 +1061,13 @@ static struct wireaddr_internal *handle_alt_addr_failure(struct wallet *w,
 
 struct wireaddr_internal *wallet_get_alt_addr(struct wallet *w,
 					      const struct node_id *node_id,
-					      bool use_our_alt_addr)
+					      bool use_my_alt_addr)
 {
 	struct db_stmt *stmt;
 	struct wireaddr_internal *alt_addrs;
 	bool transaction_started = false;
-	const char *addr_column = use_our_alt_addr
-				  ? "our_alt_addr"
+	const char *addr_column = use_my_alt_addr
+				  ? "my_alt_addr"
 				  : "peer_alt_addr";
 
 	if (!db_in_transaction(w->db)) {
@@ -1075,8 +1075,8 @@ struct wireaddr_internal *wallet_get_alt_addr(struct wallet *w,
 		transaction_started = true;
 	}
 
-	if (use_our_alt_addr)
-		stmt = db_prepare_v2(w->db, SQL("SELECT our_alt_addr"
+	if (use_my_alt_addr)
+		stmt = db_prepare_v2(w->db, SQL("SELECT my_alt_addr"
 							" FROM peers"
 							" WHERE node_id = ?;"));
 	else

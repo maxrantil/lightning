@@ -353,10 +353,10 @@ static bool verify_alt_addr(struct io_conn *conn,
 	bool is_whitelisted = false;
 
 	if (wp) {
-		size_t num_addrs = tal_count(wp->our_alt_addrs);
+		size_t num_addrs = tal_count(wp->my_alt_addrs);
 		for (size_t i = 0; i < num_addrs; ++i) {
 			char *whitelist_addr_str = fmt_wireaddr_internal(tmpctx,
-									 &wp->our_alt_addrs[i]);
+									 &wp->my_alt_addrs[i]);
 			if (strcmp(full_listening_addr, whitelist_addr_str) == 0) {
 				is_whitelisted = true;
 				status_debug("Peer's address %s is in the whitelist. Accepting connection.",

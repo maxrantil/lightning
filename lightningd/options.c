@@ -440,25 +440,27 @@ static char *opt_add_bind_addr(const char *arg, struct lightningd *ld)
 	return opt_add_addr_withtype(arg, ld, ADDR_LISTEN);
 }
 
+static void update_addr_field(u8 **field, const char *arg, struct lightningd *ld)
+{
+	if (*arg == '\0') {
+		*field = tal_free(*field);
+		return;
+	}
+
+	if (!*field)
+		*field = (u8 *)tal_strdup(ld, arg);
+	else
+		*field = (u8 *)tal_fmt(ld, "%s,%s", *field, arg);
+
+	return;
+}
+
 static char *opt_add_alt_addr(const char *arg, struct lightningd *ld)
 {
 	assert(arg != NULL);
 
-	if (*arg == '\0') {
-		ld->alt_addr = tal_free(ld->alt_addr);
-		ld->alt_bind_addr = tal_free(ld->alt_bind_addr);
-		return NULL;
-	}
-
-	if (!ld->alt_addr)
-		ld->alt_addr = (u8 *)tal_strdup(ld, arg);
-	else
-		ld->alt_addr = (u8 *)tal_fmt(ld, "%s,%s", ld->alt_addr, arg);
-
-	if (!ld->alt_bind_addr)
-		ld->alt_bind_addr = (u8 *)tal_strdup(ld, arg);
-	else
-		ld->alt_bind_addr = (u8 *)tal_fmt(ld, "%s,%s", ld->alt_bind_addr, arg);
+	update_addr_field(&ld->alt_addr, arg, ld);
+	update_addr_field(&ld->alt_bind_addr, arg, ld);
 
 	return opt_add_addr_withtype(arg, ld, ADDR_LISTEN);
 }
@@ -467,15 +469,7 @@ static char *opt_add_alt_bind_addr(const char *arg, struct lightningd *ld)
 {
 	assert(arg != NULL);
 
-	if (*arg == '\0') {
-		ld->alt_bind_addr = tal_free(ld->alt_bind_addr);
-		return NULL;
-	}
-
-	if (!ld->alt_bind_addr)
-		ld->alt_bind_addr = (u8 *)tal_strdup(ld, arg);
-	else
-		ld->alt_bind_addr = (u8 *)tal_fmt(ld, "%s,%s", ld->alt_bind_addr, arg);
+	update_addr_field(&ld->alt_bind_addr, arg, ld);
 
 	return opt_add_addr_withtype(arg, ld, ADDR_LISTEN);
 }
@@ -491,25 +485,23 @@ static char *opt_add_alt_announce_addr(const char *arg, struct lightningd *ld)
 
 	/* Check if the argument matches any of the bound alt-bind addresses */
 	bool match_found = false;
-	char **bind_addrs = tal_strsplit(tmpctx, (char *)ld->alt_bind_addr, ",", STR_NO_EMPTY);
-	for (size_t i = 0; bind_addrs[i] != NULL; i++) {
+	char **bind_addrs = tal_strsplit(tmpctx, (char *)ld->alt_bind_addr,
+					 ",", STR_NO_EMPTY);
+	for (size_t i = 0; bind_addrs[i] != NULL; i++)
 		if (strcmp(arg, bind_addrs[i]) == 0) {
 			match_found = true;
 			break;
 		}
-	}
 
 	if (!match_found)
 		return tal_fmt(tmpctx,
 			       "argument must match a bound 'alt-bind-addr'");
 
-	if (!ld->alt_addr)
-		ld->alt_addr = (u8 *)tal_strdup(ld, arg);
-	else
-		ld->alt_addr = (u8 *)tal_fmt(ld, "%s,%s", ld->alt_addr, arg);
+	update_addr_field(&ld->alt_addr, arg, ld);
 
 	return NULL;
 }
+
 
 static char *opt_subdaemon(const char *arg, struct lightningd *ld)
 {

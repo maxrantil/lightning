@@ -194,7 +194,7 @@ struct peer {
 	bool experimental_upgrade;
 
 	/* Alt address for peer connections not publicly announced */
-	u8 *our_alt_addr;
+	u8 *my_alt_addr;
 };
 
 static void start_commit_timer(struct peer *peer);
@@ -539,14 +539,14 @@ static void handle_peer_splice_locked(struct peer *peer, const u8 *msg)
 	check_mutual_splice_locked(peer);
 }
 
-static void send_peer_our_alt_addr(struct peer *peer)
+static void send_peer_my_alt_addr(struct peer *peer)
 {
 	/* Send our alt addr to peer db */
-	u8 *peer_msg = towire_peer_alt_addr(peer, peer->our_alt_addr);
+	u8 *peer_msg = towire_peer_alt_addr(peer, peer->my_alt_addr);
 	peer_write(peer->pps, take(peer_msg));
 
 	/* We need the addrs in our own db too for later whitelist confirmation */
-	u8 *msg = towire_channeld_our_alt_addr(tmpctx, peer->our_alt_addr);
+	u8 *msg = towire_channeld_my_alt_addr(tmpctx, peer->my_alt_addr);
 	wire_sync_write(MASTER_FD, take(msg));
 }
 
@@ -4175,8 +4175,8 @@ static void peer_in(struct peer *peer, const u8 *msg)
 
 	check_tx_abort(peer, msg);
 
-	if (peer->our_alt_addr)
-		send_peer_our_alt_addr(peer);
+	if (peer->my_alt_addr)
+		send_peer_my_alt_addr(peer);
 
 	/* If we're in STFU mode and aren't waiting for a STFU mode
 	 * specific message, the only valid message was tx_abort */
@@ -5683,14 +5683,14 @@ static void handle_dev_quiesce(struct peer *peer, const u8 *msg)
 
 static void handle_channeld_peer_alt_addr(struct peer *peer, const u8 *msg)
 {
-	u8 *our_alt_addr;
+	u8 *my_alt_addr;
 
-	if (!fromwire_channeld_peer_alt_addr(peer, msg, &our_alt_addr))
+	if (!fromwire_channeld_peer_alt_addr(peer, msg, &my_alt_addr))
 		master_badmsg(WIRE_CHANNELD_PEER_ALT_ADDR, msg);
 
-	u8 *peer_msg = towire_peer_alt_addr(peer, our_alt_addr);
+	u8 *peer_msg = towire_peer_alt_addr(peer, my_alt_addr);
 	peer_write(peer->pps, take(peer_msg));
-	tal_free(our_alt_addr);
+	tal_free(my_alt_addr);
 }
 
 static void req_in(struct peer *peer, const u8 *msg)
@@ -5798,7 +5798,7 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_SPLICE_STATE_ERROR:
 	case WIRE_CHANNELD_LOCAL_ANCHOR_INFO:
 	case WIRE_CHANNELD_REESTABLISHED:
-	case WIRE_CHANNELD_OUR_ALT_ADDR:
+	case WIRE_CHANNELD_MY_ALT_ADDR:
 		break;
 	}
 	master_badmsg(-1, msg);
@@ -5885,7 +5885,7 @@ static void init_channel(struct peer *peer)
 				    &peer->experimental_upgrade,
 				    &peer->splice_state->inflights,
 				    &peer->local_alias,
-				    &peer->our_alt_addr,
+				    &peer->my_alt_addr,
 				    &peer->id)) {
 		master_badmsg(WIRE_CHANNELD_INIT, msg);
 	}
